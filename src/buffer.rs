@@ -1,4 +1,4 @@
-use crate::text::{Modifier, Style};
+use crate::{text::{Modifier, Style}, window::Rect};
 use crossterm::style::Color;
 use std::cmp::min;
 use unicode_segmentation::UnicodeSegmentation;
@@ -86,7 +86,7 @@ impl Default for Cell {
     }
 }
 
-#[derive(Default, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct Buffer {
     pub width: u16,
     pub height: u16,
@@ -253,6 +253,15 @@ impl Buffer {
             x_offset += width;
         }
         (x_offset as u16, y)
+    }
+
+    pub fn set_style(&mut self, area: Rect, style: Style) {
+        for x in area.x..area.width+area.x {
+            for y in area.y..area.height+area.y {
+                let i = self.index_of(x, y);
+                self.content[i].set_style(style);
+            }
+        }
     }
 
     pub fn insert(&mut self, x: u16, y: u16, other: &Self) {

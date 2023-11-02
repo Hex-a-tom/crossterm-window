@@ -1,6 +1,5 @@
-use crossterm::event::{KeyEvent, MouseEvent};
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferDrawIterator};
 use crate::text::Style;
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
@@ -42,145 +41,18 @@ impl Rect {
     }
 }
 
-pub enum Event {
-    Key(KeyEvent),
-    Mouse(MouseEvent),
-    Paste(String),
-}
-
-pub trait WindowContent {
-    /// Full window redraw (On buffer resize mostly)
-    fn redraw(&mut self, buf: &mut Buffer) -> ContentInfo;
-
-    /// Update
-    fn update(&mut self, buf: &mut Buffer) -> ContentInfo;
-
-    /// Event
-    fn event(&mut self, buf: &mut Buffer, event: Event) -> ContentInfo;
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct ContentInfo {
-    scroll: bool,
-    scroll_pos: f32,
-}
-
-impl ContentInfo {
-    pub fn pos(pos: f32) -> Self {
-        ContentInfo {
-            scroll: true,
-            scroll_pos: pos,
-        }
-    }
-}
-
-pub struct WindowContentNone {}
-
-impl WindowContent for WindowContentNone {
-    fn redraw(&mut self, _buf: &mut Buffer) -> ContentInfo {
-        ContentInfo::default()
-    }
-
-    fn update(&mut self, _buf: &mut Buffer) -> ContentInfo {
-        ContentInfo::default()
-    }
-
-    fn event(&mut self, _buf: &mut Buffer, _event: Event) -> ContentInfo {
-        ContentInfo::default()
-    }
-}
-
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Window {
-    title: String,
     area: Rect,
     buffer: Buffer,
-
-    // Inner Window
-    content: Box<dyn WindowContent>,
-    content_info: ContentInfo,
 }
 
-fn draw_border(buf: &mut Buffer, area: Rect, title: &str, info: &ContentInfo) {
-    // Top
-    buf.set_stringn(area.x, area.y, "╭", 1, Style::default());
-    let len = title.len().min(area.width as usize - 2);
-    buf.set_stringn(area.x + 1, area.y, title, len, Style::default());
-    for i in (len as u16 + 1)..(area.width - 1) {
-        buf.set_stringn(area.x + i, area.y, "─", 1, Style::default());
-    }
-    buf.set_stringn(area.x + area.width - 1, area.y, "╮", 1, Style::default());
-
-    // Middle
-    for i in 1..area.height {
-        buf.set_stringn(area.x, area.y + i, "│", 1, Style::default());
-    }
-
-    if info.scroll {
-        buf.set_stringn(
-            area.x + area.width - 1,
-            area.y + 1,
-            "∧",
-            1,
-            Style::default(),
-        );
-        buf.set_stringn(
-            area.x + area.width - 1,
-            area.y + area.height - 1,
-            "∨",
-            1,
-            Style::default(),
-        );
-        for i in 2..area.height - 1 {
-            buf.set_stringn(
-                area.x + area.width - 1,
-                area.y + i,
-                "╎",
-                1,
-                Style::default(),
-            );
-        }
-        let pos = ((area.height - 4) as f32 * info.scroll_pos) as u16;
-        buf.set_stringn(
-            area.x + area.width - 1,
-            area.y + 2 + pos,
-            "█",
-            1,
-            Style::default(),
-        );
-    } else {
-        for i in 1..area.height {
-            buf.set_stringn(
-                area.x + area.width - 1,
-                area.y + i,
-                "│",
-                1,
-                Style::default(),
-            );
-        }
-    }
-
-    // Bottom
-    buf.set_stringn(area.x, area.y + area.height, "╰", 1, Style::default());
-    for i in 1..area.width - 1 {
-        buf.set_stringn(area.x + i, area.y + area.height, "─", 1, Style::default());
-    }
-    buf.set_stringn(
-        area.x + area.width - 1,
-        area.y + area.height,
-        "╯",
-        1,
-        Style::default(),
-    );
-}
 
 impl Window {
-    pub fn new(title: String, area: Rect, content: Box<dyn WindowContent>) -> Self {
+    pub fn new(area: Rect) -> Self {
         Window {
-            title,
             area,
-            buffer: Buffer::empty(area.width - 2, area.height - 2),
-            content,
-            content_info: ContentInfo::default(),
+            buffer: Buffer::empty(area.width, area.height),
         }
     }
 
@@ -188,7 +60,6 @@ impl Window {
         self.area.width = width;
         self.area.height = height;
         self.buffer.resize(width, height);
-        self.content_info = self.content.redraw(&mut self.buffer);
     }
 
     pub fn resize_by(&mut self, width: i16, height: i16) {
@@ -196,6 +67,10 @@ impl Window {
             self.area.width.saturating_add_signed(width),
             self.area.height.saturating_add_signed(height),
         )
+    }
+
+    pub fn reset(&mut self) {
+        self.buffer.reset();
     }
 
     pub fn move_to(&mut self, x: u16, y: u16) {
@@ -208,16 +83,94 @@ impl Window {
         self.area.y = self.area.y.saturating_add_signed(y);
     }
 
-    pub fn event(&mut self, event: Event) {
-        self.content_info = self.content.event(&mut self.buffer, event);
+    pub fn pos(&self) -> (u16, u16) {
+        (self.area.x, self.area.y)
     }
 
-    pub fn update(&mut self) {
-        self.content_info = self.content.update(&mut self.buffer);
+    pub fn width(&self) -> u16 {
+        self.area.width
+    }
+
+    pub fn height(&self) -> u16 {
+        self.area.height
     }
 
     pub fn draw(&self, buffer: &mut Buffer) {
-        buffer.insert(self.area.x + 1, self.area.y + 1, &self.buffer);
-        draw_border(buffer, self.area, &self.title, &self.content_info);
+        buffer.insert(self.area.x, self.area.y, &self.buffer);
+    }
+
+    pub fn content_iter(&self) -> BufferDrawIterator {
+        self.buffer.draw()
+    }
+
+    pub fn set_lines<S>(&mut self, x: u16, y: u16, string: S, style: Style)
+    where
+        S: AsRef<str>,
+    {
+        self.buffer.set_lines(x, y, string, style)
+    }
+
+    pub fn set_string<S>(&mut self, x: u16, y: u16, string: S, style: Style)
+    where
+        S: AsRef<str>,
+    {
+        self.buffer.set_string(x, y, string, style)
+    }
+
+    pub fn set_stringn<S>(
+        &mut self,
+        x: u16,
+        y: u16,
+        string: S,
+        width: usize,
+        style: Style,
+    ) -> (u16, u16)
+    where
+        S: AsRef<str>,
+    {
+        self.buffer.set_stringn(x, y, string, width, style)
+    }
+
+    pub fn draw_border(&mut self, title: &str) {
+        let buf = &mut self.buffer;
+        let area = &self.area;
+
+        // Top
+        buf.set_stringn(area.x, area.y, "╭", 1, Style::default());
+        let len = title.len().min(area.width as usize - 2);
+        buf.set_stringn(area.x + 1, area.y, title, len, Style::default());
+        for i in (len as u16 + 1)..(area.width - 1) {
+            buf.set_stringn(area.x + i, area.y, "─", 1, Style::default());
+        }
+        buf.set_stringn(area.x + area.width - 1, area.y, "╮", 1, Style::default());
+
+        // Middle
+        for i in 1..area.height {
+            buf.set_stringn(area.x, area.y + i, "│", 1, Style::default());
+            buf.set_stringn(
+                area.x + area.width - 1,
+                area.y + i,
+                "│",
+                1,
+                Style::default(),
+                );
+        }
+
+        // Bottom
+        buf.set_stringn(area.x, area.y + area.height, "╰", 1, Style::default());
+        for i in 1..area.width - 1 {
+            buf.set_stringn(area.x + i, area.y + area.height, "─", 1, Style::default());
+        }
+        buf.set_stringn(
+            area.x + area.width - 1,
+            area.y + area.height,
+            "╯",
+            1,
+            Style::default(),
+            );
+    }
+
+    pub fn set_style(&mut self, area: Rect, style: Style) {
+        self.buffer.set_style(area, style)
     }
 }
